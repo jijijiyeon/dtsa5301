@@ -1,0 +1,204 @@
+---
+title: "Covid-19 Study"
+author: "Jiji Baek"
+date: "2024-08-18"
+output:
+  html_document: default
+---
+  
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#### Introduction
+This study examines Covid-19 data to explore whether there is a correlation between Covid-19 cases and deaths. We will create visualizations and fit a linear regression model to assess if the data supports a linear relationship between these variables.
+
+
+#### Data Loading and Preparation
+We begin by loading the necessary libraries and datasets for our analysis. The datasets include Covid-19 case and death counts for both the United States and globally.
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+```
+
+Here is the Covid dataset
+``` {r}
+url_us_confirmed <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv"
+us_confirmed <- read_csv(url_us_confirmed)
+url_us_deaths <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_US.csv"
+us_deaths <- read_csv(url_us_deaths)
+url_global_confirmed <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv"
+global_confirmed <- read_csv(url_global_confirmed)
+url_global_deaths <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv"
+global_deaths <- read_csv(url_global_deaths)
+
+```
+
+#### Data Transformation
+We transform the global and U.S. datasets to prepare them for analysis. This involves reshaping the data to a long format, filtering out cases with no reported infections, and merging relevant datasets to include population information and create combined keys for each region.
+
+```{r}
+global_cases <- global_confirmed %>%
+  pivot_longer(cols=-c('Province/State','Country/Region', Lat, Long),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(-c(Lat,Long))
+global_deaths <- global_deaths %>%
+  pivot_longer(cols=-c('Province/State','Country/Region', Lat, Long),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(-c(Lat,Long))
+global <- global_cases %>%
+  full_join(global_deaths) %>%
+  rename(Country_Region = 'Country/Region',
+         Province_State = 'Province/State') %>%
+  mutate(date=mdy(date))
+summary(global)
+global <- global %>% filter(cases > 0)
+us_cases <- us_confirmed %>%
+  pivot_longer(cols = -(UID:Combined_Key),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(Admin2:cases) %>%
+  mutate(date=mdy(date))%>%
+  select(-c(Lat,Long_))
+us_deaths <- us_deaths %>%
+  pivot_longer(cols = -(UID:Population),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(Admin2:deaths) %>%
+  mutate(date=mdy(date))%>%
+  select(-c(Lat,Long_))
+us <- us_cases %>%
+  full_join(us_deaths)
+
+global <- global %>%
+  unite("Combined_Key",
+        c(Province_State, Country_Region),
+        sep= ", ",
+        na.rm = TRUE,
+        remove = FALSE)
+uid_lookup_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+uid <- read_csv(uid_lookup_url) %>%
+  select(-c(Lat, Long_, Combined_Key, code3, iso2, iso3, Admin2))
+global <- global %>%
+  left_join(uid, by=c("Province_State","Country_Region"))%>%
+  select(-c(UID, FIPS))%>%
+  select(Province_State, Country_Region, date, cases, deaths, Population, Combined_Key)
+
+```
+
+
+#### Plotting Covid Cases
+We can visualize the number of Covid-19 cases and deaths over time. The first plot displays global data, while the second focuses on data from Washington state. These visualizations help us understand the temporal trends of the pandemic in differnet regions.
+
+```{r ny_murders, echo=FALSE}
+us_by_state <- us %>%
+  group_by(Province_State, Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths *1000000/Population) %>%
+  select(Province_State, Country_Region, date,
+         cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+us_totals <- us_by_state%>%
+  group_by(Country_Region, date) %>%
+  summarize(cases=sum(cases),deaths=sum(deaths),
+            Population=sum(Population)) %>%
+  mutate(deaths_per_mill = deaths*1000000/Population) %>%
+  select(Country_Region, date, cases, deaths,
+         deaths_per_mill, Population) %>%
+  ungroup()
+
+us_totals %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x=date, y=cases))+
+  geom_line(aes(color="cases"))+
+  geom_point(aes(color="cases"))+
+  geom_line(aes(y=deaths, color="deaths"))+
+  geom_point(aes(y=deaths, color="deaths"))+
+  scale_y_log10() +
+  theme(legend.position="bottom",
+        axis.text.x = element_text(angle=90))+
+  labs(title="COVID 19 in US", y=NULL)
+
+state <- "Washington"
+us_by_state %>%
+  filter(Province_State==state) %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x=date,y=cases))+
+  geom_line(aes(color="cases"))+
+  geom_point(aes(color="cases"))+
+  geom_line(aes(y=deaths,color="deaths"))+
+  geom_point(aes(y=deaths,color="deaths"))+
+  scale_y_log10()+
+  theme(legend.position="bottom",
+        axis.text.x=element_text(angle=90))+
+  labs(title=str_c("COVID in ", state), y=NULL)
+
+us_state_totals <- us_by_state %>%
+    group_by(Province_State) %>%
+    summarize(deaths = max(deaths), cases=max(cases),
+              population = max(Population),
+              cases_per_thou = 1000*cases/population,
+              deaths_per_thou = 1000*deaths/population) %>%
+    filter(cases > 0,population > 0)
+
+```
+
+
+#### Analysis
+We analyze the data by calculating new daily cases and deaths, then visualizing these trends over time. This analysis provides insights into the day-to-day progression of the pandemic in the U.S. and Washington State.
+
+```{r}
+us_by_state <- us_by_state %>%
+  mutate(new_cases = cases - lag(cases),
+         new_deaths = deaths - lag(deaths))
+us_totals <- us_totals %>%
+  mutate(new_cases = cases - lag(cases),
+         new_deaths = deaths - lag(deaths))
+
+us_totals %>%
+  ggplot(aes(x=date, y=cases))+
+  geom_line(aes(color="new_cases"))+
+  geom_point(aes(color="new_cases"))+
+  geom_line(aes(y=new_deaths, color="new_deaths"))+
+  geom_point(aes(y=new_deaths, color="new_deaths"))+
+  scale_y_log10() +
+  theme(legend.position="bottom",
+        axis.text.x = element_text(angle=90))+
+  labs(title="COVID 19 in US", y=NULL)
+
+us_by_state %>%
+  filter(Province_State==state) %>%
+  ggplot(aes(x=date, y=cases))+
+  geom_line(aes(color="new_cases"))+
+  geom_point(aes(color="new_cases"))+
+  geom_line(aes(y=new_deaths, color="new_deaths"))+
+  geom_point(aes(y=new_deaths, color="new_deaths"))+
+  scale_y_log10() +
+  theme(legend.position="bottom",
+        axis.text.x = element_text(angle=90))+
+  labs(title=str_c("COVID in ", state), y=NULL)
+
+```
+
+#### Linear Model for Covid-19 Data
+We fitted a linear regression model to exxamine the relationship between Covid-19 cases per thousand and deaths per thousand across U.S. states. The model indicates a positive linear trend, with the coefficient for cases per thousand being 0.01133. This suggests that for every increase of one case per thousand, the number of deaths per thousand is expected to increase by approximately 0.01133. The coefficient is statistically significant, with a p-value of 9.76e-06, indicating strong evidence against the null hypothesis.
+The model has an R-squared value of 0.3061, which means that approximately 30.61% of the variance in death rates can be explained by the case rates. The adjusted R-squared is slightly lower at 0.2933, accounting for the number of predicators in the model. The residual standard error is 0.8615 and F-statistic is 23.82, further confirming the model's significance.
+
+```{r}
+mod <- lm(deaths_per_thou ~ cases_per_thou, data=us_state_totals)
+summary(mod)
+us_tot_w_pred <- us_state_totals %>% mutate(pred=predict(mod))
+us_tot_w_pred %>% ggplot() +
+    geom_point(aes(x=cases_per_thou, y=deaths_per_thou), color="blue")+
+    geom_point(aes(x=cases_per_thou, y=pred), color="red")
+```
+
+
+
+#### Conclusion
+This analysis demonstrates a statistically significant positive relationship between Covid-19 cases and deaths. This suggests that higher case counts are associated with higher death counts. However, there may be potential biases and limitations in our analysis, such as regional data coverage and omitted variables. In this case with bias knowledge that we know, vaccine has been created and got more accessible in 2020, which definitely starts fluctuating the correlation in the graph. The number of vaccines could be a stronger variable for this linear relationship. Future research should consider a broader set of factors and regions to improve the robustness of these findings.
