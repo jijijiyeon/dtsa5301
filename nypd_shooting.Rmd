@@ -1,0 +1,164 @@
+---
+title: "NYPD Shooting Study"
+author: "Jiji Baek"
+date: "2024-08-08"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#### Introduction
+
+In this document, we will explore the NYPD shooting data and perform an analysis on whether shootings that resulted in murder in New York would be depended on shooting occasions in New York. We will create plots and fit a linear model to see whether linear regression would fit into this dataset.
+
+
+#### Data Loading and Preparation
+
+We first load the necessary libraries and load the data from the NYPD shooting dataset.
+
+These are the libraries we need to load:
+```{r}
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+```
+
+Here is the data from NYPD
+``` {r}
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+nypd_shooting <- read_csv(url)
+```
+
+## New York Overall Shooting Analysis
+
+#### Data Transformation
+
+Here, we can transform 'OCCUR_DATE' to a column 'month' and 'STATISTICAL_MURDER_FLAG' to 'murder_flag' to utilize in analysis. Then, we can populate shootings and shootings that led to murder per YYYY-MM format.
+
+```{r}
+nypd_shooting$date <- mdy(nypd_shooting$OCCUR_DATE)
+nypd_shooting_data <- nypd_shooting %>%
+    mutate(month = format(date, "%Y-%m")) %>%
+    select(c(month,BORO,STATISTICAL_MURDER_FLAG)) %>%
+    arrange(month,BORO)
+nypd_shooting_data <- nypd_shooting_data %>%
+    rename(murder_flag=STATISTICAL_MURDER_FLAG,
+           location=BORO) %>%
+    mutate(murder_flag = ifelse(murder_flag == "TRUE", 1, 0))
+ny_shooting <- nypd_shooting_data %>%
+    group_by(month) %>%
+    summarize(count=n(), 
+              murder_counts = sum(murder_flag))
+```
+
+
+#### Data Summary
+
+A brief summary of the ny_shooting dataset.
+```{r}
+summary(ny_shooting)
+```
+
+#### Plotting New York Shootings
+
+We visualize the number of shoootings and murders over time.
+
+```{r ny_murders, echo=FALSE}
+ny_shooting <- ny_shooting %>%
+  mutate(month_date = as.Date(paste0(month, "-01")))
+ny_murders <- ggplot() +
+  geom_point(data = ny_shooting, aes(x = month_date, y = murder_counts, color = "shooting_murder_counts")) +
+    geom_point(data = ny_shooting, aes(x = month_date, y = count, color = "shootings")) +
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    labs(title = "New York Shootings", y = NULL, x = "Month") +
+    scale_x_date(date_labels = "%Y-%m", date_breaks = "1 year", minor_breaks = NULL)
+ny_murders
+```
+
+#### Linear Model for NY Shooting Data
+
+The plot below demonstrates the linear relationship between the total number of shootings and the number of murders resulting from those shootings. The blue points represent actual data, while the red line and points represent the predicted values from the linear model. 
+The model shows a positive linear trend, indicating that as the total number of shooting increases, the number of shooting murders also tends to increase. The summary below also indicates a strong positive relationship as the model's coefficient for shooting count is 0.181 and the coefficient is statistically significant with a p-value less than 2e-16. The model explains about 71.8% of the variance in murder counts, with a residual standard error of 5.87. The summary indicates how shooting count is a significant contribtor to explaining the variation in murder shooting counts.
+
+```{r}
+ny_lm <- lm(murder_counts ~ count, data = ny_shooting)
+ny_shooting_pred <- ny_shooting %>% mutate(pred=predict(ny_lm))
+ny_shooting_pred %>% ggplot()+
+  geom_point(aes(x=count,y=murder_counts),color="blue")+
+  geom_point(aes(x=count,y=pred),color="red")
+summary(ny_lm)
+```
+
+## Manhattan Shooting Analysis
+
+#### Introduction
+
+We observed there is a strong postiive linear relationship between the number of New York shootings and the number of shooting murders in New York. For Manhattan shooting analysis, we will explore whether there would be a linear relationship between the total number of shootings and the number of murders resulting from shootings only in Manhattan. 
+
+#### Data Transformation
+Here, we can transform nypd_shooting_data from above to count shootings and murder counts by region. Then limiting to Manhattan to grab the murder counts in Manhattan. By joining those two datasets, we will obtain new york shooting counts and manhattan murder shooting counts.
+
+```{r}
+shootings_by_region <- nypd_shooting_data %>%
+  group_by(location, month) %>%
+  summarize(count=n(), 
+            murder_counts = sum(murder_flag))
+
+manhattan_shootings <- shootings_by_region %>%
+  filter(location=="MANHATTAN")
+
+manhattan_ny <- left_join(
+    ny_shooting %>% select(month, count),
+    manhattan_shootings %>% select(month, murder_counts),
+    by = "month")
+```
+
+#### Data Summary
+
+A brief summary of the manhattan_ny dataset.
+```{r}
+summary(manhattan_ny)
+```
+
+#### Plotting New York Shootings and Manhattan Murder Shootings
+
+```{r manhattan_ny, echo=FALSE}
+manhattan_ny <- manhattan_ny %>%
+  mutate(month_date = as.Date(paste0(month, "-01")))
+ggplot() +
+  geom_point(data = manhattan_ny, aes(x = month_date, y = murder_counts, color = "shooting_murder_counts")) +
+    geom_point(data = manhattan_ny, aes(x = month_date, y = count, color = "shootings")) +
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    labs(title = "New York Shootings and Manhattan Murder Shootings", y = NULL, x = "Month") +
+    scale_x_date(date_labels = "%Y-%m", date_breaks = "1 year", minor_breaks = NULL)
+```
+
+#### Linear Model for Manhattan Shooting Murder Data
+
+The plot below demonstrates the linear relationship between the total number of shootings in New York and the number of shooting murders in Manhattan region. We can observe that blue points, the actual data, are a lot more spreaded out against the red line than the previous line model above. In the summary, the model also explains only about 13.7% of the variance in murder counts, which is considered low. The lower R-squared value in the summary suggests that other factors may also play a role in explaining the variation in murder counts.
+
+```{r}
+manhattan_lm <- lm(murder_counts ~ count, data=manhattan_ny)
+manhattan_ny_pred <- manhattan_ny %>%
+    mutate(pred=predict(manhattan_lm))
+manhattan_ny_pred %>% ggplot()+
+    geom_point(aes(x=count,y=murder_counts),color="blue")+
+    geom_point(aes(x=count,y=pred),color="red")
+summary(manhattan_lm)
+```
+
+
+#### Conclusion
+
+In both analyses, we examined the relationship between the number of shootings and the resulting number of murders using a linear regression model. Our findings indicate statistically significant positive association between shootings and murders; this suggests that as the number of shootigs increases, the number of resulting murders also tends to increase. 
+New York overall linear model indicated that shooting was a strong factor to influence murder counts while New York shooting was not the strongest factor to influence murder counts in Manhattan. There are several potential sources of bias could affect the result of these analyses. NYPD shooting dataset might not have covered other regions around Manhattan. My personal bias was to compare Manhattan murder shootings with other regions surrounding Manhattan region. Also, the accuracy of the data could have been impacted these analyses. Furthermore, I might have omitted variables from this dataset that could have been a huge factor of murder counts. 
+
+Final Thoughts: 
+The analyses highlights a significant relationship between shootings and murder shootings, underscoring the importance of addressing gun violence to reduce homicide rates. However, the findings also point to the need for a more comprehensive model that incorporates additional factors to better understand the dynamics of murder rates. Future research should consider a broader range of variables and potentially explore different regions to enhance the robustness and applicability of the conclusions drawn.
